@@ -6,6 +6,33 @@ import numpy as np
 import streamlit.components.v1 as components
 import json
 
+# --- Constants & App Setup ---
+FILTER_TYPE_ACCOUNT = "계정 (account)"
+FILTER_TYPE_CHAR = "캐릭터 (char)"
+NODE_SIZE_PRICE = "price"
+NODE_SIZE_CONNECTION = "connection"
+MAX_NODES_TO_RENDER = 700
+
+def initialize_session_state():
+    """세션 상태의 기본값을 설정합니다."""
+    defaults = {
+        'base_edge_data': None,
+        'df_filtered_original': None,
+        'base_detail_data': None,
+        'all_node_ids': [],
+        'force_render': False,
+        'amount_threshold': 0,
+        'node_size_standard': NODE_SIZE_PRICE,
+        'min_price': 0,
+        'filter_type': FILTER_TYPE_ACCOUNT,
+        'filter_value': ""
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+initialize_session_state()
+
 # ----------------------------------------------------------------------
 # 원본 코드 함수 (일부 수정됨)
 # ----------------------------------------------------------------------
@@ -50,11 +77,10 @@ def data_processing_by_price(df, amount):
     return edge_data, data_filtered # 그래프용 집계 데이터와 테이블용 상세 데이터 모두 반환
 
 # 3. network_graph 함수 (원본과 거의 동일)
-def network_graph(edge_data, original_df, title_text, standard='connection'):
+def network_graph(edge_data, original_df, title_text, standard=NODE_SIZE_CONNECTION):
     """
     집계된 엣지 데이터(edge_data)와 원본 데이터(original_df)를 기반으로
-    Plotly 네트워크 그래프를 생성하고 Figure 객체를 반환합니다.
-    (클립보드 복사 기능을 위해 노드에 customdata 추가)
+    Plotly 네트워크 그래프를 생성하고 Figure 객체와 하이라이팅을 위한 인접 리스트를 반환합니다.
     """
     G = nx.DiGraph()
 
@@ -62,7 +88,7 @@ def network_graph(edge_data, original_df, title_text, standard='connection'):
         G.add_edge(row['seller_account'], row['buyer_account'], weight=row['transaction_count'], price=row['total_price'])
         
     if not G.nodes():
-        return go.Figure(layout=go.Layout(title="표시할 데이터가 없습니다."))
+        return go.Figure(layout=go.Layout(title="표시할 데이터가 없습니다.")), json.dumps([])
 
     pos = nx.spring_layout(G, seed=42)
     for node in G.nodes():
@@ -71,6 +97,7 @@ def network_graph(edge_data, original_df, title_text, standard='connection'):
     buyer_amounts = original_df.groupby('buyer_account')['price'].sum().to_dict()
     seller_amounts = original_df.groupby('seller_account')['price'].sum().to_dict()
 
+    # 1. Edge Trace (Lines)
     edge_x, edge_y = [], []
     for edge in G.edges():
         x0, y0 = G.nodes[edge[0]]['pos']
@@ -84,6 +111,24 @@ def network_graph(edge_data, original_df, title_text, standard='connection'):
         hoverinfo='none',
         mode='lines')
 
+    # 2. Edge Hover Trace (Invisible markers at midpoint)
+    middle_node_trace = go.Scatter(
+        x=[], y=[],
+        text=[],
+        mode='markers',
+        hoverinfo='text',
+        marker=dict(opacity=0)
+    )
+    for edge in G.edges(data=True):
+        x0, y0 = G.nodes[edge[0]]['pos']
+        x1, y1 = G.nodes[edge[1]]['pos']
+        middle_node_trace['x'] += tuple([(x0 + x1) / 2])
+        middle_node_trace['y'] += tuple([(y0 + y1) / 2])
+        weight = edge[2]['weight']
+        price = edge[2]['price']
+        middle_node_trace['text'] += tuple([f"거래 횟수: {weight}<br>총 거래액: {price:,.0f}"])
+
+    # 3. Node Trace
     node_x, node_y, node_adjacencies, node_text, node_colors, node_sizes, node_ids = [], [], [], [], [], [], []
     
     edge_prices = [s[-1]['price'] for s in G.edges(data=True)]
@@ -150,17 +195,24 @@ def network_graph(edge_data, original_df, title_text, standard='connection'):
             size=node_sizes,
             line_width=2))
 
-    fig = go.Figure(data=[edge_trace, node_trace],
+    # 4. Adjacency list for highlighting
+    node_list = list(G.nodes())
+    node_map = {node: i for i, node in enumerate(node_list)}
+    adj_list = []
+    for node in node_list:
+        neighbors = list(G.successors(node)) + list(G.predecessors(node))
+        adj_list.append([node_map[neighbor] for neighbor in set(neighbors)])
+
+    fig = go.Figure(data=[edge_trace, node_trace, middle_node_trace],
                  layout=go.Layout(
                      title=dict(text=title_text, font=dict(size=16)),
                      showlegend=False,
                      hovermode='closest',
                      margin=dict(b=20, l=5, r=5, t=40),
                      xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                     yaxis=dict(showgrid=False, zeroline=False, showticklabels=False))
-                )
+                     yaxis=dict(showgrid=False, zeroline=False, showticklabels=False)))
     
-    return fig
+    return fig, json.dumps(adj_list)
 
 # ----------------------------------------------------------------------
 # Streamlit 앱 구현
@@ -168,33 +220,6 @@ def network_graph(edge_data, original_df, title_text, standard='connection'):
 
 st.set_page_config(layout="wide")
 st.title("[MSMC] 장비 거래 네트워크 분석앱")
-
-# --- Constants & App Setup ---
-FILTER_TYPE_ACCOUNT = "계정 (account)"
-FILTER_TYPE_CHAR = "캐릭터 (char)"
-NODE_SIZE_PRICE = "price"
-NODE_SIZE_CONNECTION = "connection"
-MAX_NODES_TO_RENDER = 700
-
-def initialize_session_state():
-    """세션 상태의 기본값을 설정합니다."""
-    defaults = {
-        'base_edge_data': None,
-        'df_filtered_original': None,
-        'base_detail_data': None,
-        'all_node_ids': [],
-        'force_render': False,
-        'amount_threshold': 0,
-        'node_size_standard': NODE_SIZE_PRICE,
-        'min_price': 0,
-        'filter_type': FILTER_TYPE_ACCOUNT,
-        'filter_value': ""
-    }
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
-
-initialize_session_state()
 
 
 # 1. 파일 업로드
@@ -331,7 +356,7 @@ if uploaded_file is not None:
         if display_edge_data.empty:
             st.warning("선택한 조건에 맞는 그래프 데이터가 없습니다.")
         else:
-            fig = network_graph(
+            fig, adj_list_json = network_graph(
                 display_edge_data, 
                 st.session_state.df_filtered_original,
                 title_text=title_text, 
@@ -343,6 +368,12 @@ if uploaded_file is not None:
             <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
             <div id="plotly-graph-div"></div>
             <script>
+                var spec = {graph_json};
+                var adj = {adj_list_json};
+                var graphDiv = document.getElementById('plotly-graph-div');
+                Plotly.newPlot(graphDiv, spec.data, spec.layout);
+    
+                // --- Clipboard copy logic ---
                 function fallbackCopyToClipboard(text) {{
                     var textArea = document.createElement("textarea");
                     textArea.value = text;
@@ -370,21 +401,45 @@ if uploaded_file is not None:
                         fallbackCopyToClipboard(text);
                     }}
                 }}
-                var spec = {graph_json};
-                var graphDiv = document.getElementById('plotly-graph-div');
-                Plotly.newPlot(graphDiv, spec.data, spec.layout);
+    
                 graphDiv.on('plotly_click', function(data) {{
                     if (data.points.length > 0) {{
                         var point = data.points[0];
+                        // curveNumber 1 is the node_trace
                         if (point.curveNumber === 1 && point.customdata) {{
                             copyToClipboard(point.customdata);
                         }}
                     }}
                 }});
+    
+                // --- Highlighting logic ---
+                graphDiv.on('plotly_hover', function(data) {{
+                    if (data.points.length > 0) {{
+                        var point = data.points[0];
+                        // curveNumber 1 is the node_trace
+                        if (point.curveNumber === 1) {{
+                            var pointNumber = point.pointNumber;
+                            var neighbors = adj[pointNumber];
+                            
+                            var numNodes = spec.data[1].x.length;
+                            var opacities = Array(numNodes).fill(0.2);
+                            
+                            opacities[pointNumber] = 1.0;
+                            neighbors.forEach(function(neighborIdx) {{
+                                opacities[neighborIdx] = 1.0;
+                            }});
+                            
+                            Plotly.restyle(graphDiv, {{'marker.opacity': [opacities]}}, [1]);
+                        }}
+                    }}
+                }});
+    
+                graphDiv.on('plotly_unhover', function(data) {{
+                    Plotly.restyle(graphDiv, {{'marker.opacity': 1}}, [1]);
+                }});
             </script>
             '''
-            components.html(js_script, height=800, scrolling=False)
-    
+            components.html(js_script, height=800, scrolling=False)    
     def display_table(selected_account):
         """상세 거래 데이터 테이블을 표시합니다."""
         st.subheader("📊 상세 거래 데이터")
@@ -418,6 +473,15 @@ if uploaded_file is not None:
                 if '거래가격' in df_to_show.columns:
                     df_to_show.sort_values(by="거래가격", ascending=False, inplace=True)
                 st.dataframe(df_to_show)
+
+                csv_data = df_to_show.to_csv(index=False).encode('utf-8-sig')
+                file_name = f'detail_{selected_account}.csv' if selected_account != "-- 전체 보기 --" else "detail_all.csv"
+                st.download_button(
+                    label="📥 CSV로 다운로드",
+                    data=csv_data,
+                    file_name=file_name,
+                    mime='text/csv',
+                )
             else:
                 st.warning("표시할 컬럼을 하나 이상 선택해주세요.")
         else:
