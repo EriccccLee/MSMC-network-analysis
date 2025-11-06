@@ -188,6 +188,9 @@ def load_data(file):
     df = pd.read_csv(file)
     df['seller_account'] = df['seller_account'].astype(str)
     df['buyer_account'] = df['buyer_account'].astype(str)
+    df['seller_char'] = df['seller_char'].astype(str)
+    df['buyer_char'] = df['buyer_char'].astype(str)
+    df['item_no'] = df['item_no'].astype(str)
     df['price'] = pd.to_numeric(df['price'], errors='coerce')
     df = df.dropna(subset=['price', 'seller_account', 'buyer_account'])
     return df
@@ -361,7 +364,7 @@ if uploaded_file is not None:
 
         st.write("테이블에 표시할 컬럼을 선택하세요:")
         all_possible_cols = ['izoneareaid', 'sell_time', 'seller_account', 'seller_char', 'seller_lv', 'auction_no', 'price', 'item_index', 'item_no', 'seller 총과금액', 'buy_time', 'buyer_account', 'buyer_char', 'buyer_lv', 'tier', 'gear_score', 'buyer 총과금액', 'soul_index', 'item_extra_option', '가위횟수', '스타포스레벨', '장비레벨', '초월레벨', '문장인덱스', '아이템명', '소울']
-        default_cols = ['sell_time', 'seller_account', 'seller_lv', 'price', 'gear_score', '아이템명', '가위횟수', '스타포스레벨', '장비레벨', '초월레벨', '문장인덱스', '소울']
+        default_cols = ['sell_time', 'seller_account', 'buyer_account', 'price', 'gear_score', '아이템명', '가위횟수', '스타포스레벨', '장비레벨', '초월레벨', '문장인덱스', '소울']
 
         if not display_detail_data.empty:
             available_cols_in_order = [col for col in all_possible_cols if col in display_detail_data.columns]
@@ -391,3 +394,4 @@ else:
     st.info("CSV 파일을 업로드하여 분석을 시작하세요.")
     
     
+
