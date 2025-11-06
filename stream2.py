@@ -18,9 +18,11 @@ def search_df(data, account_no):
                 (data['buyer_account'].astype(str).str.contains(query))]
 
 # 2. data_processing_by_price 함수 (성능 개선)
+@st.cache_data
 def data_processing_by_price(df, amount):
     """
     거래 금액 기준으로 데이터를 집계하고, 상세 데이터도 함께 반환합니다.
+    (캐싱 적용)
     """
     df_edge = df.groupby(['seller_account', 'buyer_account']).agg(
         transaction_count=('auction_no', 'count'),
@@ -104,9 +106,9 @@ def network_graph(edge_data, original_df, title_text, standard='connection'):
         price_weight = G.degree(node, weight='price')
         node_adjacencies.append(connections)
         
-        if standard == "connection":
+        if standard == NODE_SIZE_CONNECTION:
             node_sizes.append(10 + (connections * 2))
-        elif standard == "price":
+        elif standard == NODE_SIZE_PRICE:
             node_sizes.append(10 + (price_weight / devider))
 
         is_seller = node in active_sellers
@@ -165,20 +167,35 @@ def network_graph(edge_data, original_df, title_text, standard='connection'):
 # ----------------------------------------------------------------------
 
 st.set_page_config(layout="wide")
-st.title("[MSMC] 장비 거래 네트워크 분석기")
+st.title("[MSMC] 장비 거래 네트워크 분석앱")
 
-# --- Session State 초기화 ---
-# 앱이 재실행되어도 데이터를 보존하기 위해 사용
-if 'base_edge_data' not in st.session_state:
-    st.session_state.base_edge_data = None # 원본 집계 데이터
-if 'df_filtered_original' not in st.session_state:
-    st.session_state.df_filtered_original = None # 원본 DF (필터링된)
-if 'base_detail_data' not in st.session_state:
-    st.session_state.base_detail_data = None # 상세 거래 내역 데이터
-if 'all_node_ids' not in st.session_state:
-    st.session_state.all_node_ids = [] # 필터링용 계정 ID 리스트
-if 'force_render' not in st.session_state:
-    st.session_state.force_render = False # 대규모 그래프 강제 렌더링 상태
+# --- Constants & App Setup ---
+FILTER_TYPE_ACCOUNT = "계정 (account)"
+FILTER_TYPE_CHAR = "캐릭터 (char)"
+NODE_SIZE_PRICE = "price"
+NODE_SIZE_CONNECTION = "connection"
+MAX_NODES_TO_RENDER = 700
+
+def initialize_session_state():
+    """세션 상태의 기본값을 설정합니다."""
+    defaults = {
+        'base_edge_data': None,
+        'df_filtered_original': None,
+        'base_detail_data': None,
+        'all_node_ids': [],
+        'force_render': False,
+        'amount_threshold': 0,
+        'node_size_standard': NODE_SIZE_PRICE,
+        'min_price': 0,
+        'filter_type': FILTER_TYPE_ACCOUNT,
+        'filter_value': ""
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+initialize_session_state()
+
 
 # 1. 파일 업로드
 uploaded_file = st.file_uploader("거래 내역 CSV 파일을 업로드하세요.", type=["csv"])
@@ -201,28 +218,7 @@ if uploaded_file is not None:
     # --- 사이드바 ---
     st.sidebar.header("⚙️ 그래프 생성 옵션")
 
-    
-    # 1. 네트워크 생성 기준
-    st.sidebar.subheader("1. 네트워크 생성 기준")
-    amount_threshold = st.sidebar.number_input(
-        "기준 총 거래액 (total_price >)", 
-        min_value=0, value=0, step=100000
-    )
-    
-    # 2. 시각화 옵션
-    st.sidebar.subheader("2. 시각화 옵션")
-    node_size_standard = st.sidebar.selectbox(
-        "노드 크기 기준", options=["price", "connection"], index=0
-    )
-    
-    # 3. 최소 거래금액 (옵션)
-    st.sidebar.subheader("3. 최소 거래 금액 필터 \n(옵션)")
-    min_price = st.sidebar.number_input(
-        "최소 거래 가격 (price >=)", 
-        min_value=0, value=0, step=1000
-    )
-
-    # 4. 그래프 생성 버튼 (Session State에 데이터 저장)
+    # 콜백 함수를 먼저 정의합니다.
     def generate_graph_data():
         """
         버튼 클릭 시 호출될 콜백 함수.
@@ -230,21 +226,38 @@ if uploaded_file is not None:
         """
         with st.spinner("데이터 처리 중..."):
             st.session_state.force_render = False # 강제 렌더링 상태 초기화
-            # 1. 사전 필터링 적용
-            df_filtered = df_original[df_original['price'] >= min_price].copy()
             
-            # 2. 엣지 및 상세 데이터 집계
+            df_to_process = df_original.copy()
+
+            # session_state에서 필터 값 가져오기
+            if 'filter_value' in st.session_state and st.session_state.filter_value:
+                query = str(st.session_state.filter_value)
+                if st.session_state.filter_type == FILTER_TYPE_ACCOUNT:
+                    df_to_process = df_to_process[
+                        (df_to_process['seller_account'].astype(str).str.contains(query)) |
+                        (df_to_process['buyer_account'].astype(str).str.contains(query))
+                    ]
+                elif st.session_state.filter_type == FILTER_TYPE_CHAR:
+                    df_to_process = df_to_process[
+                        (df_to_process['seller_char'].astype(str).str.contains(query)) |
+                        (df_to_process['buyer_char'].astype(str).str.contains(query))
+                    ]
+
+            # session_state에서 필터 값 가져오기
+            df_filtered = df_to_process[df_to_process['price'] >= st.session_state.min_price].copy()
+            
+            # session_state에서 기준 총 거래액 가져오기
             base_data, base_details = data_processing_by_price(
                 df_filtered, 
-                amount=amount_threshold
+                amount=st.session_state.amount_threshold
             )
             
-            # 3. Session State에 결과 저장
+            # Session State에 결과 저장
             st.session_state.base_edge_data = base_data
             st.session_state.df_filtered_original = df_filtered # 그래프용 원본
             st.session_state.base_detail_data = base_details # 상세 데이터 저장
             
-            # 4. 필터링용 노드 ID 리스트 생성
+            # 필터링용 노드 ID 리스트 생성
             if not base_data.empty:
                 node_ids = pd.concat([
                     base_data['seller_account'], 
@@ -254,104 +267,126 @@ if uploaded_file is not None:
             else:
                 st.session_state.all_node_ids = []
 
+    # --- UI 위젯 정의 ---
+    st.sidebar.subheader("1. 그래프 구성")
+    st.sidebar.number_input(
+        "기준 총 거래액 (total_price >)", 
+        min_value=0, value=st.session_state.amount_threshold, step=100000,
+        help="이 금액을 초과하는 총 거래 관계를 대상으로 네트워크를 생성합니다.",
+        key='amount_threshold'
+    )
+    st.sidebar.selectbox(
+        "노드(원) 크기 기준", options=[NODE_SIZE_PRICE, NODE_SIZE_CONNECTION], index=[NODE_SIZE_PRICE, NODE_SIZE_CONNECTION].index(st.session_state.node_size_standard),
+        help="노드 크기를 '총 거래액' 또는 '연결 수' 기준으로 결정합니다.",
+        key='node_size_standard'
+    )
+
     st.sidebar.button(
         "🚀 그래프 생성", 
         on_click=generate_graph_data,
         help="클릭 시 데이터를 처리하고 메인 화면에 그래프를 표시합니다."
     )
 
-    # --- 메인 화면 (그래프 및 필터) ---
-    if st.session_state.base_edge_data is not None:
-        
-        # --- 성능 안전장치 & 계정 필터 ---
-        node_count = pd.concat([st.session_state.base_edge_data['seller_account'], st.session_state.base_edge_data['buyer_account']]).nunique()
-        MAX_NODES_TO_RENDER = 700
+    st.sidebar.divider()
 
-        st.subheader("🔍 계정 ID로 필터링")
-        st.caption("그래프와 하단 테이블에 모두 적용됩니다.")
-        filter_options = ["-- 전체 보기 --"] + st.session_state.all_node_ids
-        selected_account = st.selectbox(
-            "필터링할 계정 ID를 선택하세요:",
-            options=filter_options,
-            index=0,
-            label_visibility="collapsed"
-        )
+    st.sidebar.subheader("2. 데이터 필터링 (옵션)")
+    st.sidebar.radio(
+    "특정 계정/캐릭터 필터", 
+    [FILTER_TYPE_ACCOUNT, FILTER_TYPE_CHAR],
+    index=[FILTER_TYPE_ACCOUNT, FILTER_TYPE_CHAR].index(st.session_state.filter_type),
+    help="특정 계정 또는 캐릭터와 관련된 거래만 필터링합니다.",
+    key='filter_type'
+    )
+    st.sidebar.text_input(
+        "Vopenid 또는 Vroleid 입력",
+        placeholder="전체 또는 일부 입력",
+        key='filter_value'
+    )
+    st.sidebar.number_input(
+        "최소 개별 거래액", 
+        min_value=0, value=st.session_state.min_price, step=1000,
+        help="이 금액 미만인 개별 거래는 최초 데이터에서 제외합니다.",
+        key='min_price'
+    )
 
-        # --- 그래프 시각화 (조건부) ---
+    def display_graph(node_count, selected_account):
+        """네트워크 그래프를 조건에 따라 표시합니다."""
         st.subheader("📈 네트워크 그래프")
+        
         if node_count > MAX_NODES_TO_RENDER and not st.session_state.get('force_render', False):
             st.error(f"⚠️ **성능 경고:** 시각화할 노드의 개수({node_count}개)가 너무 많습니다.")
             if st.button("그래도 그래프 생성하기 (앱이 멈출 수 있습니다)"):
                 st.session_state.force_render = True
                 st.rerun()
             st.warning(f"느린 속도를 원치 않으시면, 사이드바의 '기준 총 거래액'을 높여 노드 개수를 {MAX_NODES_TO_RENDER}개 이하로 줄여주세요.")
+            return
+    
+        if selected_account == "-- 전체 보기 --":
+            display_edge_data = st.session_state.base_edge_data
+            title_text = f"전체 거래 네트워크 (기준금액: {st.session_state.amount_threshold:,.0f})"
+        else:
+            display_edge_data = search_df(st.session_state.base_edge_data, selected_account)
+            title_text = f"'{selected_account}' 계정 거래 네트워크"
         
-        else: # 노드 개수가 적당하거나, 사용자가 강제 생성을 선택한 경우
-            if selected_account == "-- 전체 보기 --":
-                display_edge_data = st.session_state.base_edge_data
-                title_text = f"전체 거래 네트워크 (기준금액: {amount_threshold:,.0f})"
-            else:
-                display_edge_data = search_df(st.session_state.base_edge_data, selected_account)
-                title_text = f"'{selected_account}' 계정 거래 네트워크"
+        if display_edge_data.empty:
+            st.warning("선택한 조건에 맞는 그래프 데이터가 없습니다.")
+        else:
+            fig = network_graph(
+                display_edge_data, 
+                st.session_state.df_filtered_original,
+                title_text=title_text, 
+                standard=st.session_state.node_size_standard
+            )
             
-            if display_edge_data.empty:
-                st.warning("선택한 조건에 맞는 그래프 데이터가 없습니다.")
-            else:
-                fig = network_graph(
-                    display_edge_data, 
-                    st.session_state.df_filtered_original, # 툴팁용 원본 DF 전달
-                    title_text=title_text, 
-                    standard=node_size_standard
-                )
-                
-                graph_json = fig.to_json()
-                js_script = f'''
-                <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-                <div id="plotly-graph-div"></div>
-                <script>
-                    function fallbackCopyToClipboard(text) {{
-                        var textArea = document.createElement("textarea");
-                        textArea.value = text;
-                        textArea.style.top = "0"; textArea.style.left = "0"; textArea.style.position = "fixed";
-                        document.body.appendChild(textArea);
-                        textArea.focus(); textArea.select();
-                        try {{
-                            var successful = document.execCommand('copy');
-                            if (successful) alert('계정 ID가 클립보드에 복사되었습니다: ' + text);
-                            else alert('클립보드 복사에 실패했습니다.');
-                        }} catch (err) {{
-                            console.error('Fallback clipboard copy failed:', err);
-                            alert('클립보드 복사에 실패했습니다.');
-                        }}
-                        document.body.removeChild(textArea);
+            graph_json = fig.to_json()
+            js_script = f'''
+            <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+            <div id="plotly-graph-div"></div>
+            <script>
+                function fallbackCopyToClipboard(text) {{
+                    var textArea = document.createElement("textarea");
+                    textArea.value = text;
+                    textArea.style.top = "0"; textArea.style.left = "0"; textArea.style.position = "fixed";
+                    document.body.appendChild(textArea);
+                    textArea.focus(); textArea.select();
+                    try {{
+                        var successful = document.execCommand('copy');
+                        if (successful) alert('계정 ID가 클립보드에 복사되었습니다: ' + text);
+                        else alert('클립보드 복사에 실패했습니다.');
+                    }} catch (err) {{
+                        console.error('Fallback clipboard copy failed:', err);
+                        alert('클립보드 복사에 실패했습니다.');
                     }}
-                    function copyToClipboard(text) {{
-                        if (navigator.clipboard && window.isSecureContext) {{
-                            navigator.clipboard.writeText(text).then(function() {{
-                                alert('계정 ID가 클립보드에 복사되었습니다: ' + text);
-                            }}, function(err) {{
-                                fallbackCopyToClipboard(text);
-                            }});
-                        }} else {{
+                    document.body.removeChild(textArea);
+                }}
+                function copyToClipboard(text) {{
+                    if (navigator.clipboard && window.isSecureContext) {{
+                        navigator.clipboard.writeText(text).then(function() {{
+                            alert('계정 ID가 클립보드에 복사되었습니다: ' + text);
+                        }}, function(err) {{
                             fallbackCopyToClipboard(text);
+                        }});
+                    }} else {{
+                        fallbackCopyToClipboard(text);
+                    }}
+                }}
+                var spec = {graph_json};
+                var graphDiv = document.getElementById('plotly-graph-div');
+                Plotly.newPlot(graphDiv, spec.data, spec.layout);
+                graphDiv.on('plotly_click', function(data) {{
+                    if (data.points.length > 0) {{
+                        var point = data.points[0];
+                        if (point.curveNumber === 1 && point.customdata) {{
+                            copyToClipboard(point.customdata);
                         }}
                     }}
-                    var spec = {graph_json};
-                    var graphDiv = document.getElementById('plotly-graph-div');
-                    Plotly.newPlot(graphDiv, spec.data, spec.layout);
-                    graphDiv.on('plotly_click', function(data) {{
-                        if (data.points.length > 0) {{
-                            var point = data.points[0];
-                            if (point.curveNumber === 1 && point.customdata) {{
-                                copyToClipboard(point.customdata);
-                            }}
-                        }}
-                    }});
-                </script>
-                '''
-                components.html(js_script, height=800, scrolling=False)
-
-        # --- 상세 데이터 테이블 ---
+                }});
+            </script>
+            '''
+            components.html(js_script, height=800, scrolling=False)
+    
+    def display_table(selected_account):
+        """상세 거래 데이터 테이블을 표시합니다."""
         st.subheader("📊 상세 거래 데이터")
         
         if selected_account == "-- 전체 보기 --":
@@ -361,11 +396,11 @@ if uploaded_file is not None:
                 (st.session_state.base_detail_data['seller_account'] == selected_account) |
                 (st.session_state.base_detail_data['buyer_account'] == selected_account)
             ]
-
+    
         st.write("테이블에 표시할 컬럼을 선택하세요:")
         all_possible_cols = ['izoneareaid', 'sell_time', 'seller_account', 'seller_char', 'seller_lv', 'auction_no', 'price', 'item_index', 'item_no', 'seller 총과금액', 'buy_time', 'buyer_account', 'buyer_char', 'buyer_lv', 'tier', 'gear_score', 'buyer 총과금액', 'soul_index', 'item_extra_option', '가위횟수', '스타포스레벨', '장비레벨', '초월레벨', '문장인덱스', '아이템명', '소울']
         default_cols = ['sell_time', 'seller_account', 'buyer_account', 'price', 'gear_score', '아이템명', '가위횟수', '스타포스레벨', '장비레벨', '초월레벨', '문장인덱스', '소울']
-
+    
         if not display_detail_data.empty:
             available_cols_in_order = [col for col in all_possible_cols if col in display_detail_data.columns]
             default_cols_in_order = [col for col in default_cols if col in available_cols_in_order]
@@ -387,11 +422,32 @@ if uploaded_file is not None:
                 st.warning("표시할 컬럼을 하나 이상 선택해주세요.")
         else:
             st.info("표시할 상세 거래 데이터가 없습니다.")
+    
+    def display_main_content():
+        """메인 콘텐츠(그래프, 테이블 등)를 표시합니다."""
+        if st.session_state.base_edge_data is None:
+            st.info("사이드바에서 옵션을 설정한 후 '그래프 생성' 버튼을 눌러주세요.")
+            return
+    
+        # --- 성능 안전장치 & 계정 필터 ---
+        node_count = pd.concat([st.session_state.base_edge_data['seller_account'], st.session_state.base_edge_data['buyer_account']]).nunique()
+    
+        st.subheader("🔍 계정 ID로 필터링")
+        st.caption("그래프와 하단 테이블에 모두 적용됩니다.")
+        filter_options = ["-- 전체 보기 --"] + st.session_state.all_node_ids
+        selected_account = st.selectbox(
+            "필터링할 계정 ID를 선택하세요:",
+            options=filter_options,
+            index=0,
+            label_visibility="collapsed"
+        )
+    
+        display_graph(node_count, selected_account)
+        display_table(selected_account)
+    
+    # --- 메인 화면 ---
+    display_main_content()
+    
+    
 
-    else:
-        st.info("사이드바에서 옵션을 설정한 후 '네트워크 그래프 생성하기' 버튼을 눌러주세요.")
-else:
-    st.info("CSV 파일을 업로드하여 분석을 시작하세요.")
-    
-    
 
