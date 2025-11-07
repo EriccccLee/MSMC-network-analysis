@@ -224,11 +224,17 @@ st.title("[MSMC] 장비 거래 네트워크 분석앱")
 
 
 # 1. 파일 업로드
-uploaded_file = st.file_uploader("거래 내역 CSV 파일을 업로드하세요.", type=["csv"])
+uploaded_file = st.file_uploader("거래 내역 CSV 또는 Excel 파일을 업로드하세요.", type=["csv", "xlsx"])
 
 @st.cache_data
 def load_data(file):
-    df = pd.read_csv(file)
+    if file.name.endswith('.csv'):
+        df = pd.read_csv(file)
+    elif file.name.endswith('.xlsx'):
+        df = pd.read_excel(file)
+    else:
+        st.error("지원하지 않는 파일 형식입니다. CSV 또는 XLSX 파일을 업로드해주세요.")
+        return None
     df['seller_vopenid'] = df['seller_vopenid'].astype(str)
     df['buyer_vopenid'] = df['buyer_vopenid'].astype(str)
     df['seller_vroleid'] = df['seller_vroleid'].astype(str)
