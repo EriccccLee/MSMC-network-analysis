@@ -26,7 +26,8 @@ def initialize_session_state():
         'min_거래가격': 0,
         'filter_type': FILTER_TYPE_ACCOUNT,
         'filter_values_text': "",
-        'filter_file': None
+        'filter_file': None,
+        'filter_logic_type': "관계 기준"
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -45,9 +46,9 @@ def search_df(data, account_no):
     return data[(data['seller_vopenid'].astype(str).str.contains(query)) | 
                 (data['buyer_vopenid'].astype(str).str.contains(query))]
 
-# 2. data_processing_by_거래가격 함수 (성능 개선)
+# 2. data_processing_by_관계거래가격 함수 (기존)
 @st.cache_data
-def data_processing_by_거래가격(df, amount):
+def data_processing_by_관계거래가격(df, amount):
     """
     거래 금액 기준으로 데이터를 집계하고, 상세 데이터도 함께 반환합니다.
     (캐싱 적용)
@@ -76,6 +77,39 @@ def data_processing_by_거래가격(df, amount):
     ).reset_index()
     
     return edge_data, data_filtered # 그래프용 집계 데이터와 테이블용 상세 데이터 모두 반환
+
+# 2-1. data_processing_by_계정거래가격 함수 (신규 추가)
+@st.cache_data
+def data_processing_by_계정거래가격(df, amount):
+    """
+    계정의 총 거래액(판매+구매) 기준으로 데이터를 필터링하고,
+    상세 데이터도 함께 반환합니다. (캐싱 적용)
+    """
+    if df.empty:
+        empty_edges = pd.DataFrame(columns=['seller_vopenid', 'buyer_vopenid', 'transaction_count', 'total_거래가격'])
+        empty_details = pd.DataFrame(columns=df.columns)
+        return empty_edges, empty_details
+
+    seller_totals = df.groupby('seller_vopenid')['거래가격'].sum()
+    buyer_totals = df.groupby('buyer_vopenid')['거래가격'].sum()
+    
+    all_accounts = pd.concat([seller_totals, buyer_totals]).groupby(level=0).sum()
+    
+    filtered_accounts = all_accounts[all_accounts > amount].index.tolist()
+    
+    if not filtered_accounts:
+        empty_edges = pd.DataFrame(columns=['seller_vopenid', 'buyer_vopenid', 'transaction_count', 'total_거래가격'])
+        empty_details = pd.DataFrame(columns=df.columns)
+        return empty_edges, empty_details
+        
+    data_filtered = df[df['seller_vopenid'].isin(filtered_accounts) | df['buyer_vopenid'].isin(filtered_accounts)]
+    
+    edge_data = data_filtered.groupby(['seller_vopenid', 'buyer_vopenid']).agg(
+        transaction_count=('auction_no', 'count'),
+        total_거래가격=('거래가격', 'sum')
+    ).reset_index()
+    
+    return edge_data, data_filtered
 
 # 3. network_graph 함수 (원본과 거의 동일)
 def network_graph(edge_data, original_df, title_text, standard=NODE_SIZE_CONNECTION):
@@ -299,11 +333,17 @@ if uploaded_file is not None:
             # session_state에서 필터 값 가져오기
             df_filtered = df_to_process[df_to_process['거래가격'] >= st.session_state.min_거래가격].copy()
             
-            # session_state에서 기준 총 거래액 가져오기
-            base_data, base_details = data_processing_by_거래가격(
-                df_filtered, 
-                amount=st.session_state.amount_threshold
-            )
+            # session_state에서 선택한 필터 로직에 따라 데이터 처리
+            if st.session_state.filter_logic_type == "계정 기준":
+                base_data, base_details = data_processing_by_계정거래가격(
+                    df_filtered, 
+                    amount=st.session_state.amount_threshold
+                )
+            else: # "관계 기준"
+                base_data, base_details = data_processing_by_관계거래가격(
+                    df_filtered, 
+                    amount=st.session_state.amount_threshold
+                )
             
             # Session State에 결과 저장
             st.session_state.base_edge_data = base_data
@@ -322,11 +362,18 @@ if uploaded_file is not None:
 
     # --- UI 위젯 정의 ---
     st.sidebar.subheader("1. 그래프 구성")
+    st.sidebar.selectbox(
+        "금액 필터링 기준",
+        options=["관계 기준", "계정 기준"],
+        key='filter_logic_type',
+        help="""- 관계 기준: 판매자-구매자 관계의 '총 거래액'을 기준으로 필터링합니다.
+- 계정 기준: 각 계정의 '총 거래액(판매+구매)'을 기준으로 필터링합니다."""
+    )
     st.sidebar.number_input(
-        "기준 총 거래액 (total_거래가격 >)", 
+        "기준 총 거래액", 
         min_value=0, value=st.session_state.amount_threshold, step=100000,
-        help="이 금액을 초과하는 총 거래 관계를 대상으로 네트워크를 생성합니다.",
-        key='amount_threshold'
+        help="선택한 필터링 기준에 따라 이 금액을 초과하는 대상을 필터링합니다.",
+key='amount_threshold'
     )
     st.sidebar.selectbox(
         "노드(원) 크기 기준", options=[NODE_SIZE_거래가격, NODE_SIZE_CONNECTION], index=[NODE_SIZE_거래가격, NODE_SIZE_CONNECTION].index(st.session_state.node_size_standard),
