@@ -9,7 +9,7 @@ import json
 # --- Constants & App Setup ---
 FILTER_TYPE_ACCOUNT = "계정 (account)"
 FILTER_TYPE_CHAR = "캐릭터 (char)"
-NODE_SIZE_PRICE = "price"
+NODE_SIZE_거래가격 = "거래가격"
 NODE_SIZE_CONNECTION = "connection"
 MAX_NODES_TO_RENDER = 700
 
@@ -22,10 +22,11 @@ def initialize_session_state():
         'all_node_ids': [],
         'force_render': False,
         'amount_threshold': 0,
-        'node_size_standard': NODE_SIZE_PRICE,
-        'min_price': 0,
+        'node_size_standard': NODE_SIZE_거래가격,
+        'min_거래가격': 0,
         'filter_type': FILTER_TYPE_ACCOUNT,
-        'filter_value': ""
+        'filter_values_text': "",
+        'filter_file': None
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -41,37 +42,37 @@ initialize_session_state()
 def search_df(data, account_no):
     """(필터링용) 집계된 엣지 데이터에서 특정 계정 번호로 필터링합니다."""
     query = str(account_no)
-    return data[(data['seller_account'].astype(str).str.contains(query)) | 
-                (data['buyer_account'].astype(str).str.contains(query))]
+    return data[(data['seller_vopenid'].astype(str).str.contains(query)) | 
+                (data['buyer_vopenid'].astype(str).str.contains(query))]
 
-# 2. data_processing_by_price 함수 (성능 개선)
+# 2. data_processing_by_거래가격 함수 (성능 개선)
 @st.cache_data
-def data_processing_by_price(df, amount):
+def data_processing_by_거래가격(df, amount):
     """
     거래 금액 기준으로 데이터를 집계하고, 상세 데이터도 함께 반환합니다.
     (캐싱 적용)
     """
-    df_edge = df.groupby(['seller_account', 'buyer_account']).agg(
+    df_edge = df.groupby(['seller_vopenid', 'buyer_vopenid']).agg(
         transaction_count=('auction_no', 'count'),
-        total_price=('price', 'sum')
+        total_거래가격=('거래가격', 'sum')
     ).reset_index()
     
-    a = df_edge[df_edge['total_price'] > amount]
+    a = df_edge[df_edge['total_거래가격'] > amount]
 
     # 기준을 충족하는 거래가 없는 경우 빈 데이터프레임 반환
     if a.empty:
-        empty_edges = pd.DataFrame(columns=['seller_account', 'buyer_account', 'transaction_count', 'total_price'])
+        empty_edges = pd.DataFrame(columns=['seller_vopenid', 'buyer_vopenid', 'transaction_count', 'total_거래가격'])
         empty_details = pd.DataFrame(columns=df.columns)
         return empty_edges, empty_details
 
-    b = pd.concat([a['seller_account'], a['buyer_account']])
+    b = pd.concat([a['seller_vopenid'], a['buyer_vopenid']])
     c = list(set(b))
     
-    data_filtered = df[df['seller_account'].isin(c) | df['buyer_account'].isin(c)]
+    data_filtered = df[df['seller_vopenid'].isin(c) | df['buyer_vopenid'].isin(c)]
     
-    edge_data = data_filtered.groupby(['seller_account', 'buyer_account']).agg(
+    edge_data = data_filtered.groupby(['seller_vopenid', 'buyer_vopenid']).agg(
         transaction_count=('auction_no', 'count'),
-        total_price=('price', 'sum')
+        total_거래가격=('거래가격', 'sum')
     ).reset_index()
     
     return edge_data, data_filtered # 그래프용 집계 데이터와 테이블용 상세 데이터 모두 반환
@@ -85,7 +86,7 @@ def network_graph(edge_data, original_df, title_text, standard=NODE_SIZE_CONNECT
     G = nx.DiGraph()
 
     for _, row in edge_data.iterrows():
-        G.add_edge(row['seller_account'], row['buyer_account'], weight=row['transaction_count'], price=row['total_price'])
+        G.add_edge(row['seller_vopenid'], row['buyer_vopenid'], weight=row['transaction_count'], 거래가격=row['total_거래가격'])
         
     if not G.nodes():
         return go.Figure(layout=go.Layout(title="표시할 데이터가 없습니다.")), json.dumps([])
@@ -94,8 +95,8 @@ def network_graph(edge_data, original_df, title_text, standard=NODE_SIZE_CONNECT
     for node in G.nodes():
         G.nodes[node]['pos'] = pos[node]
 
-    buyer_amounts = original_df.groupby('buyer_account')['price'].sum().to_dict()
-    seller_amounts = original_df.groupby('seller_account')['price'].sum().to_dict()
+    buyer_amounts = original_df.groupby('buyer_vopenid')['거래가격'].sum().to_dict()
+    seller_amounts = original_df.groupby('seller_vopenid')['거래가격'].sum().to_dict()
 
     # 1. Edge Trace (Lines)
     edge_x, edge_y = [], []
@@ -125,21 +126,21 @@ def network_graph(edge_data, original_df, title_text, standard=NODE_SIZE_CONNECT
         middle_node_trace['x'] += tuple([(x0 + x1) / 2])
         middle_node_trace['y'] += tuple([(y0 + y1) / 2])
         weight = edge[2]['weight']
-        price = edge[2]['price']
-        middle_node_trace['text'] += tuple([f"거래 횟수: {weight}<br>총 거래액: {price:,.0f}"])
+        거래가격 = edge[2]['거래가격']
+        middle_node_trace['text'] += tuple([f"거래 횟수: {weight}<br>총 거래액: {거래가격:,.0f}"])
 
     # 3. Node Trace
     node_x, node_y, node_adjacencies, node_text, node_colors, node_sizes, node_ids = [], [], [], [], [], [], []
     
-    edge_prices = [s[-1]['price'] for s in G.edges(data=True)]
-    if edge_prices:
-        devider = np.mean(edge_prices)
+    edge_거래가격s = [s[-1]['거래가격'] for s in G.edges(data=True)]
+    if edge_거래가격s:
+        devider = np.mean(edge_거래가격s)
         if devider == 0: devider = 1
     else:
         devider = 1 
 
-    active_sellers = set(edge_data['seller_account'].values)
-    active_buyers = set(edge_data['buyer_account'].values)
+    active_sellers = set(edge_data['seller_vopenid'].values)
+    active_buyers = set(edge_data['buyer_vopenid'].values)
 
     for node in G.nodes():
         x, y = G.nodes[node]['pos']
@@ -148,40 +149,40 @@ def network_graph(edge_data, original_df, title_text, standard=NODE_SIZE_CONNECT
         node_ids.append(str(node)) # 클립보드 복사를 위해 str로 변환하여 ID 저장
         
         connections = G.degree(node, weight='weight')
-        price_weight = G.degree(node, weight='price')
+        거래가격_weight = G.degree(node, weight='거래가격')
         node_adjacencies.append(connections)
         
         if standard == NODE_SIZE_CONNECTION:
             node_sizes.append(10 + (connections * 2))
-        elif standard == NODE_SIZE_PRICE:
-            node_sizes.append(10 + (price_weight / devider))
+        elif standard == NODE_SIZE_거래가격:
+            node_sizes.append(10 + (거래가격_weight / devider))
 
         is_seller = node in active_sellers
         is_buyer = node in active_buyers
         
-        seller_price = seller_amounts.get(node, 0)
-        buyer_price = buyer_amounts.get(node, 0)
+        seller_거래가격 = seller_amounts.get(node, 0)
+        buyer_거래가격 = buyer_amounts.get(node, 0)
 
         if is_seller and is_buyer:
             node_type = "Seller & Buyer"
             node_colors.append('purple')
             node_text.append(
                 f"Account Type: {node_type}<br>Account ID: {node}<br># of connections: {connections}<br>"
-                f"Seller Total Price: {seller_price:,.0f}<br>Buyer Total Price: {buyer_price:,.0f}"
+                f"Seller Total 거래가격: {seller_거래가격:,.0f}<br>Buyer Total 거래가격: {buyer_거래가격:,.0f}"
             )
         elif is_seller:
             node_type = "Seller"
             node_colors.append('blue')
             node_text.append(
                 f"Account Type: {node_type}<br>Account ID: {node}<br># of connections: {connections}<br>"
-                f"Seller Total Price: {seller_price:,.0f}"
+                f"Seller Total 거래가격: {seller_거래가격:,.0f}"
             )
         else:
             node_type = "Buyer"
             node_colors.append('green')
             node_text.append(
                 f"Account Type: {node_type}<br>Account ID: {node}<br># of connections: {connections}<br>"
-                f"Buyer Total Price: {buyer_price:,.0f}"
+                f"Buyer Total 거래가격: {buyer_거래가격:,.0f}"
             )
 
     node_trace = go.Scatter(
@@ -228,13 +229,13 @@ uploaded_file = st.file_uploader("거래 내역 CSV 파일을 업로드하세요
 @st.cache_data
 def load_data(file):
     df = pd.read_csv(file)
-    df['seller_account'] = df['seller_account'].astype(str)
-    df['buyer_account'] = df['buyer_account'].astype(str)
-    df['seller_char'] = df['seller_char'].astype(str)
-    df['buyer_char'] = df['buyer_char'].astype(str)
+    df['seller_vopenid'] = df['seller_vopenid'].astype(str)
+    df['buyer_vopenid'] = df['buyer_vopenid'].astype(str)
+    df['seller_vroleid'] = df['seller_vroleid'].astype(str)
+    df['buyer_vroleid'] = df['buyer_vroleid'].astype(str)
     df['item_no'] = df['item_no'].astype(str)
-    df['price'] = pd.to_numeric(df['price'], errors='coerce')
-    df = df.dropna(subset=['price', 'seller_account', 'buyer_account'])
+    df['거래가격'] = pd.to_numeric(df['거래가격'], errors='coerce')
+    df = df.dropna(subset=['거래가격', 'seller_vopenid', 'buyer_vopenid'])
     return df
 
 if uploaded_file is not None:
@@ -254,25 +255,46 @@ if uploaded_file is not None:
             
             df_to_process = df_original.copy()
 
-            # session_state에서 필터 값 가져오기
-            if 'filter_value' in st.session_state and st.session_state.filter_value:
-                query = str(st.session_state.filter_value)
+            # session_state에서 필터 값 가져오기 (텍스트 입력 및 파일 업로드)
+            filter_list = []
+            if st.session_state.get('filter_values_text'):
+                filter_list.extend([v.strip() for v in st.session_state.filter_values_text.split(',') if v.strip()])
+
+            if st.session_state.get('filter_file'):
+                try:
+                    uploaded_file = st.session_state.filter_file
+                    if uploaded_file.name.endswith('.csv'):
+                        df_filter = pd.read_csv(uploaded_file)
+                    else:
+                        df_filter = pd.read_excel(uploaded_file)
+                    
+                    if not df_filter.empty:
+                        filter_list.extend(df_filter.iloc[:, 0].astype(str).tolist())
+                    
+                except Exception as e:
+                    st.sidebar.error(f"필터 파일 처리 중 오류: {e}")
+
+            # 중복 제거 및 빈 값 삭제
+            filter_list = list(set([item for item in filter_list if item]))
+
+            if filter_list:
+                query_regex = '|'.join(filter_list)
                 if st.session_state.filter_type == FILTER_TYPE_ACCOUNT:
                     df_to_process = df_to_process[
-                        (df_to_process['seller_account'].astype(str).str.contains(query)) |
-                        (df_to_process['buyer_account'].astype(str).str.contains(query))
+                        (df_to_process['seller_vopenid'].astype(str).str.contains(query_regex, na=False)) |
+                        (df_to_process['buyer_vopenid'].astype(str).str.contains(query_regex, na=False))
                     ]
                 elif st.session_state.filter_type == FILTER_TYPE_CHAR:
                     df_to_process = df_to_process[
-                        (df_to_process['seller_char'].astype(str).str.contains(query)) |
-                        (df_to_process['buyer_char'].astype(str).str.contains(query))
+                        (df_to_process['seller_vroleid'].astype(str).str.contains(query_regex, na=False)) |
+                        (df_to_process['buyer_vroleid'].astype(str).str.contains(query_regex, na=False))
                     ]
 
             # session_state에서 필터 값 가져오기
-            df_filtered = df_to_process[df_to_process['price'] >= st.session_state.min_price].copy()
+            df_filtered = df_to_process[df_to_process['거래가격'] >= st.session_state.min_거래가격].copy()
             
             # session_state에서 기준 총 거래액 가져오기
-            base_data, base_details = data_processing_by_price(
+            base_data, base_details = data_processing_by_거래가격(
                 df_filtered, 
                 amount=st.session_state.amount_threshold
             )
@@ -285,8 +307,8 @@ if uploaded_file is not None:
             # 필터링용 노드 ID 리스트 생성
             if not base_data.empty:
                 node_ids = pd.concat([
-                    base_data['seller_account'], 
-                    base_data['buyer_account']
+                    base_data['seller_vopenid'], 
+                    base_data['buyer_vopenid']
                 ]).unique()
                 st.session_state.all_node_ids = sorted(list(node_ids))
             else:
@@ -295,13 +317,13 @@ if uploaded_file is not None:
     # --- UI 위젯 정의 ---
     st.sidebar.subheader("1. 그래프 구성")
     st.sidebar.number_input(
-        "기준 총 거래액 (total_price >)", 
+        "기준 총 거래액 (total_거래가격 >)", 
         min_value=0, value=st.session_state.amount_threshold, step=100000,
         help="이 금액을 초과하는 총 거래 관계를 대상으로 네트워크를 생성합니다.",
         key='amount_threshold'
     )
     st.sidebar.selectbox(
-        "노드(원) 크기 기준", options=[NODE_SIZE_PRICE, NODE_SIZE_CONNECTION], index=[NODE_SIZE_PRICE, NODE_SIZE_CONNECTION].index(st.session_state.node_size_standard),
+        "노드(원) 크기 기준", options=[NODE_SIZE_거래가격, NODE_SIZE_CONNECTION], index=[NODE_SIZE_거래가격, NODE_SIZE_CONNECTION].index(st.session_state.node_size_standard),
         help="노드 크기를 '총 거래액' 또는 '연결 수' 기준으로 결정합니다.",
         key='node_size_standard'
     )
@@ -322,16 +344,33 @@ if uploaded_file is not None:
     help="특정 계정 또는 캐릭터와 관련된 거래만 필터링합니다.",
     key='filter_type'
     )
-    st.sidebar.text_input(
-        "Vopenid 또는 Vroleid 입력",
-        placeholder="전체 또는 일부 입력",
-        key='filter_value'
+    st.sidebar.text_area(
+        "Vopenid 또는 Vroleid 목록 입력",
+        placeholder="쉼표(,)로 구분하여 여러 개 입력",
+        key='filter_values_text'
+    )
+
+    st.sidebar.file_uploader(
+        "또는 CSV/Excel 파일 업로드 (첫 번째 열 사용)",
+        type=['csv', 'xlsx'],
+        key='filter_file'
+    )
+
+    # 샘플 파일 생성
+    sample_df = pd.DataFrame({'ID': ["sample_id_1", "sample_id_2"]})
+    sample_csv = sample_df.to_csv(index=False).encode('utf-8-sig')
+
+    st.sidebar.download_button(
+        label="📥 샘플 CSV 다운로드",
+        data=sample_csv,
+        file_name="filter_sample.csv",
+        mime="text/csv",
     )
     st.sidebar.number_input(
         "최소 개별 거래액", 
-        min_value=0, value=st.session_state.min_price, step=1000,
+        min_value=0, value=st.session_state.min_거래가격, step=1000,
         help="이 금액 미만인 개별 거래는 최초 데이터에서 제외합니다.",
-        key='min_price'
+        key='min_거래가격'
     )
 
     def display_graph(node_count, selected_account):
@@ -448,27 +487,81 @@ if uploaded_file is not None:
             display_detail_data = st.session_state.base_detail_data
         else:
             display_detail_data = st.session_state.base_detail_data[
-                (st.session_state.base_detail_data['seller_account'] == selected_account) |
-                (st.session_state.base_detail_data['buyer_account'] == selected_account)
+                (st.session_state.base_detail_data['seller_vopenid'] == selected_account) |
+                (st.session_state.base_detail_data['buyer_vopenid'] == selected_account)
             ]
-    
-        st.write("테이블에 표시할 컬럼을 선택하세요:")
-        all_possible_cols = ['izoneareaid', 'sell_time', 'seller_account', 'seller_char', 'seller_lv', 'auction_no', 'price', 'item_index', 'item_no', 'seller 총과금액', 'buy_time', 'buyer_account', 'buyer_char', 'buyer_lv', 'tier', 'gear_score', 'buyer 총과금액', 'soul_index', 'item_extra_option', '가위횟수', '스타포스레벨', '장비레벨', '초월레벨', '문장인덱스', '아이템명', '소울']
-        default_cols = ['sell_time', 'seller_account', 'buyer_account', 'price', 'gear_score', '아이템명', '가위횟수', '스타포스레벨', '장비레벨', '초월레벨', '문장인덱스', '소울']
-    
+
+        all_possible_cols = ['izoneareaid', '판매시간', 'seller_vopenid', 'seller_vroleid', 'seller_lv', 'auction_no', '거래가격', 'item_index', 'item_no', 'seller 총과금액', '구매시간', 'buyer_vopenid', 'buyer_vroleid', 'buyer_lv', 'tier', 'gear_score', 'buyer 총과금액', 'soul_index', 'item_extra_option', '가위횟수', '스타포스레벨', '장비레벨', '초월레벨', '문장인덱스', '아이템명', '소울']
+        default_cols = ['판매시간', 'seller_vopenid', 'buyer_vopenid', '거래가격', 'gear_score', '아이템명', '가위횟수', '스타포스레벨', '장비레벨', '초월레벨', '문장인덱스', '소울']
+        
         if not display_detail_data.empty:
             available_cols_in_order = [col for col in all_possible_cols if col in display_detail_data.columns]
             default_cols_in_order = [col for col in default_cols if col in available_cols_in_order]
+
+            # --- 컬럼 선택 위젯 ---
+            st.write("##### 컬럼 프리셋 선택")
+
+            # 세션 상태 초기화
+            if 'column_selection_state' not in st.session_state:
+                st.session_state.column_selection_state = default_cols_in_order
+
+            # 프리셋 컬럼 목록 정의
+            preset_cols = {
+                "판매자 정보": ['판매시간', 'seller_vopenid', 'seller_vroleid', 'seller_lv', 'seller 총과금액'],
+                "구매자 정보": ['구매시간', 'buyer_vopenid', 'buyer_vroleid', 'buyer_lv', 'buyer 총과금액'],
+                "거래아이템 상세 정보": ['item_no', 'item_index', 'tier', '거래가격', 'gear_score', '가위횟수', '스타포스레벨', '장비레벨', '초월레벨', '문장인덱스', '아이템명', '소울']
+            }
+
+            # 버튼 UI
+            cols = st.columns([4, 1, 5, 5, 7, 5]) # 버튼명 길이에 맞춰 비율 조정
+
+            # 1. 기본 버튼 (REPLACE)
+            if cols[0].button("기본 컬럼으로 복원", use_container_width=True):
+                st.session_state.column_selection_state = default_cols_in_order
+                st.rerun()
+
+            # Separator
+            cols[1].markdown('<div style="height: 28px; display: flex; align-items: center; justify-content: center;">|</div>', unsafe_allow_html=True)
+
+            # 2. 판매자 정보 버튼 (ADD)
+            if cols[2].button("판매자 정보", use_container_width=True):
+                current_selection = st.session_state.column_selection_state
+                new_cols = [col for col in preset_cols["판매자 정보"] if col in available_cols_in_order and col not in current_selection]
+                st.session_state.column_selection_state = current_selection + new_cols
+                st.rerun()
+
+            # 3. 구매자 정보 버튼 (ADD)
+            if cols[3].button("구매자 정보", use_container_width=True):
+                current_selection = st.session_state.column_selection_state
+                new_cols = [col for col in preset_cols["구매자 정보"] if col in available_cols_in_order and col not in current_selection]
+                st.session_state.column_selection_state = current_selection + new_cols
+                st.rerun()
+
+            # 4. 거래아이템 상세 정보 버튼 (ADD)
+            if cols[4].button("거래아이템 상세 정보", use_container_width=True):
+                current_selection = st.session_state.column_selection_state
+                new_cols = [col for col in preset_cols["거래아이템 상세 정보"] if col in available_cols_in_order and col not in current_selection]
+                st.session_state.column_selection_state = current_selection + new_cols
+                st.rerun()
+
+            # 5. 전부 비우기 버튼 (CLEAR)
+            if cols[5].button("전부 비우기", use_container_width=True):
+                st.session_state.column_selection_state = []
+                st.rerun()
+
+            # 최종 선택 멀티셀렉트
             selected_cols = st.multiselect(
-                label="표시할 컬럼 선택",
+                label="표시할 컬럼을 최종 선택하세요.",
                 options=available_cols_in_order,
-                default=default_cols_in_order,
+                default=st.session_state.column_selection_state,
                 label_visibility="collapsed"
             )
+            # 멀티셀렉트의 현재 상태를 세션 상태에 다시 저장하여 동기화
+            st.session_state.column_selection_state = selected_cols
             
             if selected_cols:
                 df_to_show = display_detail_data[selected_cols].copy()
-                rename_dict = {'sell_time': '판매시간', 'buy_time': '구매시간', 'price': '거래가격'}
+                rename_dict = {'판매시간': '판매시간', '구매시간': '구매시간', '거래가격': '거래가격'}
                 df_to_show.rename(columns={k: v for k, v in rename_dict.items() if k in df_to_show.columns}, inplace=True)
                 if '거래가격' in df_to_show.columns:
                     df_to_show.sort_values(by="거래가격", ascending=False, inplace=True)
@@ -494,7 +587,7 @@ if uploaded_file is not None:
             return
     
         # --- 성능 안전장치 & 계정 필터 ---
-        node_count = pd.concat([st.session_state.base_edge_data['seller_account'], st.session_state.base_edge_data['buyer_account']]).nunique()
+        node_count = pd.concat([st.session_state.base_edge_data['seller_vopenid'], st.session_state.base_edge_data['buyer_vopenid']]).nunique()
     
         st.subheader("🔍 계정 ID로 필터링")
         st.caption("그래프와 하단 테이블에 모두 적용됩니다.")
