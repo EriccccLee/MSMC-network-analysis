@@ -23,34 +23,8 @@ if 'start_date' not in st.session_state:
     st.session_state.start_date = yesterday - datetime.timedelta(days=7)
 if 'end_date' not in st.session_state:
     st.session_state.end_date = yesterday
-
-# --- Preset Buttons ---
-st.write("날짜 프리셋")
-cols = st.columns(4)
-
-def set_date_range(days):
-    st.session_state.end_date = yesterday
-    st.session_state.start_date = yesterday - datetime.timedelta(days=days)
-
-with cols[0]:
-    if st.button("최근 1주일", use_container_width=True):
-        set_date_range(7)
-        st.rerun()
-
-with cols[1]:
-    if st.button("최근 1개월", use_container_width=True):
-        set_date_range(30)
-        st.rerun()
-
-# --- Date Input Widgets ---
-start_date_input = st.date_input(
-    "시작 날짜",
-    key='start_date'
-)
-end_date_input = st.date_input(
-    "종료 날짜",
-    key='end_date'
-)
+if 'generated_query' not in st.session_state:
+    st.session_state.generated_query = ""
 
 # --- Query Template ---
 query_template = """/*
@@ -140,14 +114,11 @@ left join item_names e
 on c.soul_index = e.igoodsid;
 """
 
-# --- Generate and Display Query ---
-if st.button("쿼리 생성", use_container_width=True):
-    # Get dates from state (which are bound to the input widgets)
+def generate_and_set_query():
+    """세션 상태의 날짜를 기반으로 쿼리를 생성하고 세션 상태에 저장합니다."""
     start_date_str = st.session_state.start_date.strftime('%Y-%m-%d')
     end_date_str = st.session_state.end_date.strftime('%Y-%m-%d')
 
-    # Replace dates in the template
-    # Use regex to be specific
     query_with_start = re.sub(
         r"set @start = '.*';",
         f"set @start = '{start_date_str}';",
@@ -158,6 +129,60 @@ if st.button("쿼리 생성", use_container_width=True):
         f"set @end = '{end_date_str}';",
         query_with_start
     )
+    st.session_state.generated_query = final_query
 
+def set_date_range_and_generate(days):
+    """프리셋에 대한 날짜를 설정하고 쿼리를 즉시 생성합니다."""
+    st.session_state.end_date = yesterday
+    st.session_state.start_date = yesterday - datetime.timedelta(days=days)
+    generate_and_set_query()
+
+# --- Preset Buttons ---
+st.write("날짜 프리셋")
+cols = st.columns(4)
+
+with cols[0]:
+    if st.button("최근 1주일", use_container_width=True):
+        set_date_range_and_generate(7)
+        st.rerun()
+
+with cols[1]:
+    if st.button("최근 1개월", use_container_width=True):
+        set_date_range_and_generate(30)
+        st.rerun()
+
+with cols[2]:
+    if st.button("최근 반년", use_container_width=True):
+        set_date_range_and_generate(182)
+        st.rerun()
+
+with cols[3]:
+    if st.button("최근 1년", use_container_width=True):
+        set_date_range_and_generate(365)
+        st.rerun()
+
+# --- Date Input Widgets and Query Generation Button ---
+st.write("---") # Add a separator for better visual grouping
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    start_date_input = st.date_input(
+        "시작 날짜",
+        key='start_date'
+    )
+with col2:
+    end_date_input = st.date_input(
+        "종료 날짜",
+        key='end_date'
+    )
+with col3:
+    # Add some vertical space to align the button with date inputs
+    st.markdown("<br>", unsafe_allow_html=True) 
+    if st.button("쿼리 생성", use_container_width=True):
+        generate_and_set_query()
+        st.rerun()
+
+if st.session_state.generated_query:
     st.subheader("생성된 SQL 쿼리")
-    st.code(final_query, language='sql')
+    st.code(st.session_state.generated_query, language='sql')
+
