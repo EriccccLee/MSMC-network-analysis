@@ -256,7 +256,7 @@ def display_main_content():
 st.set_page_config(layout="wide")
 initialize_session_state()
 
-st.title("📈 네트워크 분석")
+st.title("📈 [MSMC] 네트워크 분석")
 
 uploaded_file = st.file_uploader(
     "거래 내역 CSV 또는 Excel 파일을 업로드하세요.", 
@@ -383,3 +383,4 @@ if uploaded_file is not None:
     display_main_content()
 else:
     st.info("분석을 시작하려면 거래 내역 파일을 업로드해주세요. 파일이 없는 경우 쿼리 생성 페이지를 방문하세요.")
+
